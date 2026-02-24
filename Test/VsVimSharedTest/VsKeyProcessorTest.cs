@@ -439,6 +439,25 @@ namespace Vim.VisualStudio.UnitTest
                 }
                 Assert.Equal(0, count);
             }
+
+            /// <summary>
+            /// Typing printable characters in Insert mode is the most common editing scenario.
+            /// VsVim defers those keystrokes to VS regardless, so the expensive
+            /// IsIncrementalSearchActive chain (WPF adornment walk, COM interop, reflection)
+            /// must be bypassed via the Insert-mode fast exit.
+            /// </summary>
+            [WpfFact]
+            public void InsertModePrintableCharsSkipIncrementalSearchCheck()
+            {
+                _mockVimBuffer.SetupGet(x => x.ModeKind).Returns(ModeKind.Insert);
+                _mockVimBuffer.Setup(x => x.CanProcessAsCommand(It.IsAny<KeyInput>())).Returns(false);
+
+                VerifyNotHandle("a");
+                VerifyNotHandle("b");
+                VerifyNotHandle("z");
+
+                _vsAdapter.Verify(x => x.IsIncrementalSearchActive(It.IsAny<ITextView>()), Times.Never());
+            }
         }
 
         /// <summary>
@@ -519,6 +538,45 @@ namespace Vim.VisualStudio.UnitTest
                 _processor.KeyDown(e);
                 Assert.Equal(0, VsKeyProcessor.KeyDownCount);
                 Assert.False(_mockAdapter.SearchInProgress);
+            }
+        }
+
+        /// <summary>
+        /// Tests for the OnKeyEvent optimization that skips the IsReadOnly COM call on key-up
+        /// events when _keyDownCount is 0 (not tracking a readonly key sequence).
+        /// </summary>
+        public sealed class NonReadOnlyKeyEventTest : VsKeyProcessorTest
+        {
+            // Base class constructor already sets up IsReadOnly to return false.
+
+            /// <summary>
+            /// For a non-readonly buffer, a KeyDown followed by KeyUp should call IsReadOnly
+            /// exactly once — only on the KeyDown. The KeyUp is a no-op when _keyDownCount is 0
+            /// and skips the COM call entirely.
+            /// </summary>
+            [WpfFact]
+            public void KeyUpSkipsIsReadOnlyWhenNotTracking()
+            {
+                var e = _device.CreateKeyEventArgs(Key.A);
+                _processor.KeyDown(e);
+                _processor.KeyUp(e);
+
+                _vsAdapter.Verify(x => x.IsReadOnly(_wpfTextView), Times.Once());
+            }
+
+            /// <summary>
+            /// Multiple keystroke pairs should each call IsReadOnly once (on KeyDown), not twice.
+            /// </summary>
+            [WpfFact]
+            public void MultipleKeyPairsCallIsReadOnlyOnceEach()
+            {
+                var e = _device.CreateKeyEventArgs(Key.A);
+                _processor.KeyDown(e);
+                _processor.KeyUp(e);
+                _processor.KeyDown(e);
+                _processor.KeyUp(e);
+
+                _vsAdapter.Verify(x => x.IsReadOnly(_wpfTextView), Times.Exactly(2));
             }
         }
 
