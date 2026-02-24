@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel.Composition;
 using Microsoft.VisualStudio.Language.Intellisense;
+using Microsoft.VisualStudio.Language.Intellisense.AsyncCompletion;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Threading;
 
@@ -13,6 +14,7 @@ namespace Vim.UI.Wpf.Implementation.Misc
     {
         private readonly ITextView _textView;
         private readonly ICompletionBroker _completionBroker;
+        private readonly IAsyncCompletionBroker _asyncCompletionBroker;
         private readonly ISignatureHelpBroker _signatureHelpBroker;
         private readonly IAsyncQuickInfoBroker _quickInfoBroker;
         private readonly JoinableTaskFactory _joinableTaskFactory;
@@ -20,12 +22,14 @@ namespace Vim.UI.Wpf.Implementation.Misc
         internal DisplayWindowBroker(
             ITextView textView,
             ICompletionBroker completionBroker,
+            IAsyncCompletionBroker asyncCompletionBroker,
             ISignatureHelpBroker signatureHelpBroker,
             IAsyncQuickInfoBroker quickInfoBroker,
             JoinableTaskFactory joinableTaskFactory)
         {
             _textView = textView;
             _completionBroker = completionBroker;
+            _asyncCompletionBroker = asyncCompletionBroker;
             _signatureHelpBroker = signatureHelpBroker;
             _quickInfoBroker = quickInfoBroker;
             _joinableTaskFactory = joinableTaskFactory;
@@ -35,7 +39,15 @@ namespace Vim.UI.Wpf.Implementation.Misc
 
         bool IDisplayWindowBroker.IsCompletionActive
         {
-            get { return _completionBroker.IsCompletionActive(_textView); }
+            get
+            {
+                // Check both legacy and async completion brokers.  AI completion systems
+                // (IntelliCode, Roslyn, GitHub Copilot completion dropdown) use the newer
+                // IAsyncCompletionBroker exclusively, so the legacy ICompletionBroker alone
+                // is not sufficient to detect whether a completion session is active.
+                return _completionBroker.IsCompletionActive(_textView) ||
+                       _asyncCompletionBroker.GetSession(_textView) != null;
+            }
         }
 
         bool IDisplayWindowBroker.IsQuickInfoActive
@@ -59,6 +71,8 @@ namespace Vim.UI.Wpf.Implementation.Misc
             {
                 _completionBroker.DismissAllSessions(_textView);
             }
+
+            _asyncCompletionBroker.GetSession(_textView)?.Dismiss();
 
             if (_signatureHelpBroker.IsSignatureHelpActive(_textView))
             {
@@ -84,6 +98,7 @@ namespace Vim.UI.Wpf.Implementation.Misc
         private static readonly object s_key = new object();
 
         private readonly ICompletionBroker _completionBroker;
+        private readonly IAsyncCompletionBroker _asyncCompletionBroker;
         private readonly ISignatureHelpBroker _signatureHelpBroker;
         private readonly IAsyncQuickInfoBroker _quickInfoBroker;
         private readonly JoinableTaskContext _joinableTaskContext;
@@ -91,11 +106,13 @@ namespace Vim.UI.Wpf.Implementation.Misc
         [ImportingConstructor]
         internal DisplayWindowBrokerFactoryService(
             ICompletionBroker completionBroker,
+            IAsyncCompletionBroker asyncCompletionBroker,
             ISignatureHelpBroker signatureHelpBroker,
             IAsyncQuickInfoBroker quickInfoBroker,
             JoinableTaskContext joinableTaskContext)
         {
             _completionBroker = completionBroker;
+            _asyncCompletionBroker = asyncCompletionBroker;
             _signatureHelpBroker = signatureHelpBroker;
             _quickInfoBroker = quickInfoBroker;
             _joinableTaskContext = joinableTaskContext;
@@ -108,6 +125,7 @@ namespace Vim.UI.Wpf.Implementation.Misc
                 () => new DisplayWindowBroker(
                         textView,
                         _completionBroker,
+                        _asyncCompletionBroker,
                         _signatureHelpBroker,
                         _quickInfoBroker,
                         _joinableTaskContext.Factory));

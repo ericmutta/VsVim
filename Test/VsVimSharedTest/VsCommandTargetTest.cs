@@ -287,6 +287,22 @@ namespace Vim.VisualStudio.UnitTest
                 _vsAdapter.Setup(x => x.IsIncrementalSearchActive(It.IsAny<ITextView>())).Returns(true);
                 AssertCannotConvert2K(VSConstants.VSStd2KCmdID.TAB);
             }
+
+            /// <summary>
+            /// Verify that commands with an unrecognized command group (e.g. from AI completion
+            /// systems like GitHub Copilot or IntelliCode) are rejected cheaply — without
+            /// invoking IsIncrementalSearchActive or InAutomationFunction, which are expensive
+            /// and get called on every QueryStatus poll from the AI completion UI.
+            /// </summary>
+            [WpfFact]
+            public void UnknownCommandGroupSkipsExpensiveChecks()
+            {
+                var unknownGuid = new Guid("11111111-1111-1111-1111-111111111111");
+                Assert.False(_targetRaw.TryConvert(unknownGuid, 0, IntPtr.Zero, out EditCommand editCommand));
+
+                _vsAdapter.Verify(x => x.IsIncrementalSearchActive(It.IsAny<ITextView>()), Times.Never());
+                _vsAdapter.Verify(x => x.InAutomationFunction, Times.Never());
+            }
         }
 
         public sealed class QueryStatusTest : VsCommandTargetTest
