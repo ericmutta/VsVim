@@ -61,24 +61,31 @@ namespace Vim.VisualStudio.Implementation.Misc
                 return true;
             }
 
-            // Don't handle input when incremental search is active.  Let Visual Studio handle it
-            if (_adapter.IsIncrementalSearchActive(TextView))
-            {
-                VimTrace.TraceInfo("VsKeyProcessor::TryProcess Incremental search active");
-                return false;
-            }
-
             // In insert modes we don't want text input going directly to VsVim.  Text input must
             // be routed through Visual Studio and IOleCommandTarget in order to get intellisense
             // properly hooked up.  Not handling it in this KeyProcessor will eventually cause
             // it to be routed through IOleCommandTarget if it's input
             //
             // The Visual Studio KeyProcessor won't pass along control characters that are less than
-            // or equal to 0x1f so we have to handle them here 
+            // or equal to 0x1f so we have to handle them here.
+            //
+            // This fast exit is placed before the IsIncrementalSearchActive check for performance:
+            // typing printable characters in Insert mode is the most common editing scenario, and
+            // VsVim defers these to VS regardless. The expensive IsIncrementalSearchActive chain
+            // (WPF adornment layer walk, COM interop, reflection) is therefore skipped for this hot
+            // path. Incremental search cannot be active when VimBuffer is in Insert mode, so the
+            // reordering is safe.
             if ((VimBuffer.ModeKind.IsAnyInsert() || VimBuffer.ModeKind.IsAnySelect()) &&
                 !VimBuffer.CanProcessAsCommand(keyInput) &&
                 (int)keyInput.Char > 0x1f)
             {
+                return false;
+            }
+
+            // Don't handle input when incremental search is active.  Let Visual Studio handle it
+            if (_adapter.IsIncrementalSearchActive(TextView))
+            {
+                VimTrace.TraceInfo("VsKeyProcessor::TryProcess Incremental search active");
                 return false;
             }
 
@@ -124,6 +131,15 @@ namespace Vim.VisualStudio.Implementation.Misc
         /// </summary>
         private void OnKeyEvent(bool isDown)
         {
+            // When not currently tracking a readonly key sequence, a key-up event requires no
+            // action and we can skip the IsReadOnly check.  IsReadOnly calls GetStateFlags via
+            // COM on every invocation; avoiding the call on key-up for normal (non-readonly)
+            // buffers halves the number of COM round-trips per keystroke.
+            if (!isDown && _keyDownCount == 0)
+            {
+                return;
+            }
+
             if (!_adapter.IsReadOnly(VimBuffer.TextView))
             {
                 if (_keyDownCount > 0)

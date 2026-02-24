@@ -214,19 +214,12 @@ namespace Vim.VisualStudio
         {
             editCommand = null;
 
-            // Don't ever process a command when we are in an automation function.  Doing so will cause VsVim to 
-            // intercept items like running Macros and certain wizard functionality
-            if (_vsAdapter.InAutomationFunction)
-            {
-                return false;
-            }
-
-            // Don't intercept commands while incremental search is active.  Don't want to interfere with it
-            if (_vsAdapter.IsIncrementalSearchActive(_vimBuffer.TextView))
-            {
-                return false;
-            }
-
+            // Check if this is a command VsVim can handle before running expensive checks.
+            // This is important for performance: AI completion systems (GitHub Copilot,
+            // IntelliCode) trigger many IOleCommandTarget.QueryStatus calls for their own
+            // command IDs.  Running InAutomationFunction (COM call) and
+            // IsIncrementalSearchActive (WPF adornment enumeration + reflection) for every
+            // such call — even ones VsVim will never handle — is unnecessarily expensive.
             var modifiers = _keyUtil.GetKeyModifiers(_vsAdapter.KeyboardDevice.Modifiers);
             if (!OleCommandUtil.TryConvert(commandGroup, commandId, variantIn, modifiers, out editCommand))
             {
@@ -237,6 +230,21 @@ namespace Vim.VisualStudio
             // then that command wins.
             if (editCommand.EditCommandKind == EditCommandKind.VisualStudioCommand)
             {
+                return false;
+            }
+
+            // Don't ever process a command when we are in an automation function.  Doing so will cause VsVim to 
+            // intercept items like running Macros and certain wizard functionality
+            if (_vsAdapter.InAutomationFunction)
+            {
+                editCommand = null;
+                return false;
+            }
+
+            // Don't intercept commands while incremental search is active.  Don't want to interfere with it
+            if (_vsAdapter.IsIncrementalSearchActive(_vimBuffer.TextView))
+            {
+                editCommand = null;
                 return false;
             }
 
